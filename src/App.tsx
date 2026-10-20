@@ -46,7 +46,7 @@ const LOCKED_ASPECTS: AspectConfig[] = [
   {
     id: '4:5',
     preset: 'portrait',
-    label: 'Feed Portrait',
+    label: 'Portrait',
     ratioFraction: '4:5',
     aspect: 4 / 5, // 0.80
     width: 1080,
@@ -57,7 +57,7 @@ const LOCKED_ASPECTS: AspectConfig[] = [
   {
     id: '1:1',
     preset: 'square',
-    label: 'Feed Square',
+    label: 'Square',
     ratioFraction: '1:1',
     aspect: 1, // 1.00
     width: 1080,
@@ -68,7 +68,7 @@ const LOCKED_ASPECTS: AspectConfig[] = [
   {
     id: '1.91:1',
     preset: 'landscape',
-    label: 'Feed Landscape',
+    label: 'Landscape',
     ratioFraction: '1.91:1',
     aspect: 1.91, // 1080 / 566
     width: 1080,
@@ -79,7 +79,7 @@ const LOCKED_ASPECTS: AspectConfig[] = [
   {
     id: '9:16',
     preset: 'stories',
-    label: 'Stories & Reels',
+    label: 'Stories / Reels',
     ratioFraction: '9:16',
     aspect: 9 / 16, // 0.5625
     width: 1080,
@@ -383,9 +383,10 @@ export default function App() {
       <main className="flex-1 max-w-7xl mx-auto w-full p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Interactive Cropper & Visual Editor */}
         <div className="lg:col-span-8 flex flex-col gap-4">
-          {/* Aspect Ratio Lock Tabs */}
-          <div className="bg-[#11131c] border border-neutral-800/90 rounded-2xl p-2 sm:p-2.5 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-1.5 w-full sm:w-auto">
+          {/* Aspect Ratio Lock Tabs & Viewport Controls */}
+          <div className="bg-[#11131c] border border-neutral-800/90 rounded-2xl p-3 shadow-xl flex flex-col gap-3">
+            {/* Aspect Ratio Selector Pills */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {LOCKED_ASPECTS.map((aspect) => {
                 const isSelected = activeAspectId === aspect.id;
                 return (
@@ -393,16 +394,16 @@ export default function App() {
                     key={aspect.id}
                     type="button"
                     onClick={() => handleAspectChange(aspect.id)}
-                    className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+                    className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-medium whitespace-nowrap transition-all cursor-pointer ${
                       isSelected
                         ? 'bg-rose-500 text-white shadow-md shadow-rose-500/25 font-semibold'
-                        : 'bg-neutral-900/70 hover:bg-neutral-800/80 text-neutral-300 hover:text-white border border-neutral-800'
+                        : 'bg-neutral-900/80 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-800'
                     }`}
                   >
                     <span>{aspect.label}</span>
                     <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded ${
-                        isSelected ? 'bg-rose-600/70 text-white' : 'bg-neutral-800 text-neutral-400 font-mono'
+                      className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                        isSelected ? 'bg-rose-600/70 text-white' : 'bg-neutral-800 text-neutral-400'
                       }`}
                     >
                       {aspect.ratioFraction}
@@ -412,44 +413,46 @@ export default function App() {
               })}
             </div>
 
-            {/* Viewport & Overlay Controls */}
-            <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-              {/* Safe-Zone Guide Toggle */}
-              <button
-                type="button"
-                onClick={() => setShowSafeZones(!showSafeZones)}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
-                  showSafeZones
-                    ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300'
-                    : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-neutral-200'
-                }`}
-                title="Toggle simulated Instagram UI safe-zone guides"
-              >
-                <Eye className="w-3.5 h-3.5" />
-                <span>Safe-Zones</span>
-              </button>
+            {/* Viewport & Overlay Tools Row */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-neutral-800/70">
+              <div className="flex items-center gap-2">
+                {/* Safe-Zone Guide Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setShowSafeZones(!showSafeZones)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+                    showSafeZones
+                      ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300'
+                      : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                  }`}
+                  title="Toggle simulated Instagram UI safe-zone guides"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>Safe-Zones</span>
+                </button>
 
-              {/* Grid Toggle */}
-              <button
-                type="button"
-                onClick={() => setShowGrid(!showGrid)}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
-                  showGrid
-                    ? 'bg-neutral-800 border-neutral-700 text-neutral-200'
-                    : 'bg-neutral-900 border-neutral-800 text-neutral-500'
-                }`}
-                title="Toggle Rule-of-Thirds Grid"
-              >
-                <Crop className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Grid</span>
-              </button>
+                {/* Grid Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setShowGrid(!showGrid)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+                    showGrid
+                      ? 'bg-neutral-800 border-neutral-700 text-neutral-200'
+                      : 'bg-neutral-900 border-neutral-800 text-neutral-500'
+                  }`}
+                  title="Toggle Rule-of-Thirds Grid"
+                >
+                  <Crop className="w-3.5 h-3.5" />
+                  <span>Grid</span>
+                </button>
+              </div>
 
               {/* View Mode Toggle (Crop vs 1080px Preview) */}
-              <div className="flex bg-neutral-900 border border-neutral-800 p-0.5 rounded-lg">
+              <div className="flex items-center bg-neutral-900 border border-neutral-800 p-0.5 rounded-lg">
                 <button
                   type="button"
                   onClick={() => setViewMode('cropper')}
-                  className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
+                  className={`px-3 py-1 rounded text-xs transition-colors cursor-pointer ${
                     viewMode === 'cropper' ? 'bg-neutral-800 text-white font-medium' : 'text-neutral-400'
                   }`}
                 >
@@ -458,7 +461,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setViewMode('preview')}
-                  className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
+                  className={`px-3 py-1 rounded text-xs transition-colors cursor-pointer ${
                     viewMode === 'preview' ? 'bg-rose-500 text-white font-medium' : 'text-neutral-400'
                   }`}
                 >

@@ -103,6 +103,9 @@ async function run() {
     console.error('Browser Page Error:', err.message);
   });
 
+  page.on('console', (msg) => console.log('BROWSER CONSOLE:', msg.text()));
+  page.on('pageerror', (err) => console.error('BROWSER ERROR:', err));
+
   // Emulate iPhone 14
   const iPhone14 = {
     name: 'iPhone 14',
@@ -186,10 +189,10 @@ async function run() {
   console.log('Captured screenshot 1: initial-mobile-load.png');
 
   // Ensure 4:5 aspect ratio is selected
-  const fourFiveButton = await findButtonByText(page, 'Feed Portrait', 10000);
+  const fourFiveButton = await findButtonByText(page, 'Portrait', 10000);
   if (fourFiveButton) {
     await fourFiveButton.click();
-    console.log('Confirmed 4:5 Feed Portrait tab is active');
+    console.log('Confirmed 4:5 Portrait tab is active');
   }
 
   // Wait for Lanczos3 pipeline execution to settle (processing indicator goes away and telemetry ready)
@@ -211,6 +214,16 @@ async function run() {
 
   // Find export button
   console.log('Locating export buttons...');
+  await page.waitForFunction(
+    () => {
+      const btn = Array.from(document.querySelectorAll('button')).find(
+        (b) => b.innerText && b.innerText.includes('Direct File Download')
+      );
+      return btn && !btn.disabled && !document.body.innerText.includes('Resampling Lanczos-3...');
+    },
+    { timeout: 15000 }
+  );
+
   const directDownloadBtn = await findButtonByText(page, 'Direct File Download', 10000);
 
   if (!directDownloadBtn) {
@@ -228,7 +241,7 @@ async function run() {
   let capturedDownload = null;
   const startTime = Date.now();
 
-  while (Date.now() - startTime < 8000) {
+  while (Date.now() - startTime < 12000) {
     // 1. Check intercepted blob download
     const captured = await page.evaluate(() => {
       if (window.__capturedDownloads && window.__capturedDownloads.length > 0) {
