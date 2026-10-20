@@ -22,7 +22,7 @@ export const INSTAGRAM_PROFILES: Record<'portrait' | 'square' | 'stories' | 'lan
     targetWidth: 1080,
     targetHeight: 1350,
     maxTargetKb: 600,
-    description: 'Bypasses server bilinear crop; maximum feed engagement',
+    description: 'Instagram feed standard; maximum vertical engagement (1080x1350)',
   },
   square: {
     name: 'square',
@@ -32,7 +32,17 @@ export const INSTAGRAM_PROFILES: Record<'portrait' | 'square' | 'stories' | 'lan
     targetWidth: 1080,
     targetHeight: 1080,
     maxTargetKb: 500,
-    description: 'Classic grid standard; minimum re-quantization',
+    description: 'Classic grid standard; uniform scaling (1080x1080)',
+  },
+  landscape: {
+    name: 'landscape',
+    label: 'Feed Landscape',
+    ratioFraction: '1.91:1',
+    aspectRatio: 1.91, // 1080 / 566
+    targetWidth: 1080,
+    targetHeight: 566,
+    maxTargetKb: 400,
+    description: 'Prevents horizontal letterbox padding (1080x566)',
   },
   stories: {
     name: 'stories',
@@ -42,17 +52,7 @@ export const INSTAGRAM_PROFILES: Record<'portrait' | 'square' | 'stories' | 'lan
     targetWidth: 1080,
     targetHeight: 1920,
     maxTargetKb: 750,
-    description: 'Full vertical screen; bypasses story video/photo transcode',
-  },
-  landscape: {
-    name: 'landscape',
-    label: 'Feed Landscape',
-    ratioFraction: '1.91:1',
-    aspectRatio: 1.91,
-    targetWidth: 1080,
-    targetHeight: 566,
-    maxTargetKb: 400,
-    description: 'Prevents horizontal letterbox padding',
+    description: 'Full vertical screen; bypasses story video/photo transcode (1080x1920)',
   },
 };
 
@@ -69,9 +69,9 @@ export interface PipelineOptions {
   aspectPreset?: InstagramPreset;  // default 'portrait'
   customCrop?: CropRect;           // optional explicit crop coordinates (from react-easy-crop)
   quality?: number;                // default 0.82 (JPEG quality)
-  unsharpAmount?: number;          // default 22
-  unsharpRadius?: number;          // default 0.6
+  unsharpAmount?: number;          // default 0.22 (22%)
   unsharpThreshold?: number;       // default 2
+  progressive?: boolean;           // default true
 }
 
 export interface PipelineResult {
@@ -95,6 +95,8 @@ export interface PipelineResult {
   };
   preset: InstagramPreset;
   quality: number;
+  isProgressive: boolean;
+  colorSpace: 'srgb';
 }
 
 export interface ExportResult {
@@ -105,6 +107,7 @@ export interface ExportResult {
 }
 
 let picaInstance: Pica | null = null;
+let mozjpegWasmModule: WebAssembly.Module | null = null;
 
 /**
  * Returns a shared Pica resizer instance configured for high performance (Wasm + Web Workers).
@@ -161,7 +164,7 @@ async function applyMemoryGuard(bitmap: ImageBitmap): Promise<ImageBitmap> {
   const canvas = document.createElement('canvas');
   canvas.width = intermediateWidth;
   canvas.height = intermediateHeight;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const ctx = canvas.getContext('2d', { colorSpace: 'srgb', willReadFrequently: true });
   if (!ctx) return bitmap;
 
   ctx.drawImage(bitmap, 0, 0, intermediateWidth, intermediateHeight);
@@ -189,26 +192,129 @@ async function loadImageBitmap(source: File | Blob | string): Promise<{ bitmap: 
     originalSize = source.size;
   }
 
-  // createImageBitmap natively respects EXIF orientation in modern browsers
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
   } catch {
-    // Fallback if imageOrientation option is unsupported
     bitmap = await createImageBitmap(blob);
   }
 
-  // Check memory limits
   bitmap = await applyMemoryGuard(bitmap);
-
   return { bitmap, size: originalSize };
 }
 
 /**
- * Executes Resampling Pipeline:
- * 1. Crop extraction from custom coordinates or aspect calculation into intermediate canvas
- * 2. Lanczos-3 downscaling to target 1080px width via Pica.js with perceptual unsharp masking
- * 3. Deterministic JPEG encoding at 0.82 quality
+ * Post-resize screen unsharp mask convolution pass to restore micro-contrast.
+ * Implements a Gaussian blur difference pass (sigma = 0.8, threshold = 2, amount = 22%)
+ * to counter Instagram's 4:2:0 chroma subsampling softening.
+ */
+export function applyScreenUnsharpMask(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  amount = 0.22,
+  threshold = 2
+): void {
+  if (amount <= 0) return;
+
+  const imgData = ctx.getImageData(0, 0, width, height);
+  const data = imgData.data;
+  const copy = new Uint8ClampedArray(data);
+
+  // 3x3 Gaussian convolution kernel approximating sigma = 0.8:
+  // [1, 2, 1]
+  // [2, 4, 2] / 16
+  // [1, 2, 1]
+  const kernel = [
+    1 / 16, 2 / 16, 1 / 16,
+    2 / 16, 4 / 16, 2 / 16,
+    1 / 16, 2 / 16, 1 / 16,
+  ];
+
+  for (let y = 1; y < height - 1; y++) {
+    const rowOffset = y * width;
+    for (let x = 1; x < width - 1; x++) {
+      const idx = (rowOffset + x) * 4;
+
+      for (let c = 0; c < 3; c++) {
+        let blurred = 0;
+        let k = 0;
+        for (let ky = -1; ky <= 1; ky++) {
+          const kRow = (y + ky) * width;
+          for (let kx = -1; kx <= 1; kx++) {
+            blurred += copy[(kRow + (x + kx)) * 4 + c] * kernel[k++];
+          }
+        }
+
+        const orig = copy[idx + c];
+        const diff = orig - blurred;
+
+        if (Math.abs(diff) > threshold) {
+          const val = orig + diff * amount;
+          data[idx + c] = val < 0 ? 0 : val > 255 ? 255 : val;
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+}
+
+/**
+ * Encodes canvas to JPEG at specified quality (default 0.82).
+ * Uses MozJPEG WebAssembly for Progressive JPEG encoding with trellis quantization when available,
+ * falling back to canvas toBlob.
+ */
+async function encodeJpegOutput(
+  canvas: HTMLCanvasElement,
+  quality: number,
+  progressive = true
+): Promise<{ blob: Blob; isProgressive: boolean }> {
+  try {
+    const ctx = canvas.getContext('2d', { colorSpace: 'srgb', willReadFrequently: true });
+    if (ctx && typeof WebAssembly !== 'undefined') {
+      const { default: mozjpegEncode, init } = await import('@jsquash/jpeg/encode.js');
+
+      if (!mozjpegWasmModule) {
+        try {
+          const wasmUrl = (await import('@jsquash/jpeg/codec/enc/mozjpeg_enc.wasm?url')).default;
+          const wasmBinary = await fetch(wasmUrl).then((r) => r.arrayBuffer());
+          mozjpegWasmModule = await WebAssembly.compile(wasmBinary);
+          await init(mozjpegWasmModule);
+        } catch (initErr) {
+          console.warn('Custom MozJPEG wasm compile notice:', initErr);
+        }
+      }
+
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const arrayBuffer = await mozjpegEncode(imgData, {
+        quality: Math.round(quality * 100),
+        progressive,
+        baseline: !progressive,
+        trellis_multipass: true,
+      });
+
+      const blob = new Blob([arrayBuffer], { type: 'image/jpeg' });
+      return { blob, isProgressive: progressive };
+    }
+  } catch (err) {
+    console.warn('MozJPEG Wasm progressive encoder fallback:', err);
+  }
+
+  // Fallback to Pica/Canvas JPEG export
+  const resizer = getPica();
+  const blob = await resizer.toBlob(canvas, 'image/jpeg', quality);
+  return { blob, isProgressive: false };
+}
+
+/**
+ * Executes Core Image Pipeline:
+ * 1. Target Width: Exactly 1080px (clamped max width)
+ * 2. Aspect Ratio Presets: 4:5, 1:1, 1.91:1, 9:16
+ * 3. Color Space: Standard sRGB forced via 2D Canvas context (8-bit per channel)
+ * 4. Downsampling: Lanczos-3 interpolation via Pica
+ * 5. Sharpening: Post-resize unsharp mask convolution pass
+ * 6. Export Format: Progressive JPEG at 0.82 quality
  */
 export async function processImage(
   source: File | Blob | string,
@@ -219,9 +325,11 @@ export async function processImage(
   const targetWidth = options.targetWidth ?? 1080;
   const quality = options.quality ?? 0.82;
   const aspectPreset = options.aspectPreset ?? 'portrait';
-  const unsharpAmount = options.unsharpAmount ?? 22;
-  const unsharpRadius = options.unsharpRadius ?? 0.6;
+  const unsharpAmount = options.unsharpAmount !== undefined
+    ? (options.unsharpAmount > 1 ? options.unsharpAmount / 100 : options.unsharpAmount)
+    : 0.22;
   const unsharpThreshold = options.unsharpThreshold ?? 2;
+  const progressive = options.progressive ?? true;
 
   // 1. Ingest image and decode
   const { bitmap, size: originalSize } = await loadImageBitmap(source);
@@ -251,15 +359,18 @@ export async function processImage(
   const clampedCropWidth = Math.max(1, Math.min(Math.round(cropRect.width), sourceWidth - clampedX));
   const clampedCropHeight = Math.max(1, Math.min(Math.round(cropRect.height), sourceHeight - clampedY));
 
-  // 3. Render uncompressed crop into intermediate Canvas
+  // 3. Render uncompressed crop into intermediate Canvas forcing sRGB color space
   const cropCanvas = document.createElement('canvas');
   cropCanvas.width = clampedCropWidth;
   cropCanvas.height = clampedCropHeight;
 
-  const cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
+  const cropCtx = cropCanvas.getContext('2d', {
+    colorSpace: 'srgb',
+    willReadFrequently: true,
+  });
   if (!cropCtx) {
     bitmap.close();
-    throw new Error('Could not acquire 2D rendering context for intermediate crop canvas.');
+    throw new Error('Could not acquire 2D sRGB rendering context for intermediate crop canvas.');
   }
 
   // Draw pure uncompressed crop slice at 1:1 pixel scale
@@ -283,21 +394,28 @@ export async function processImage(
   resizedCanvas.width = targetWidth;
   resizedCanvas.height = targetHeight;
 
+  const resizedCtx = resizedCanvas.getContext('2d', {
+    colorSpace: 'srgb',
+    willReadFrequently: true,
+  });
+
   const resizer = getPica();
   await resizer.resize(cropCanvas, resizedCanvas, {
     quality: 3, // Lanczos-3
     filter: 'lanczos3',
-    unsharpAmount,
-    unsharpRadius,
-    unsharpThreshold,
   });
 
-  // Intermediate crop canvas is no longer needed; release memory
+  // Intermediate crop canvas memory release
   cropCanvas.width = 0;
   cropCanvas.height = 0;
 
-  // 5. Deterministic JPEG Export at specified quality (default 0.82)
-  const resultBlob = await resizer.toBlob(resizedCanvas, 'image/jpeg', quality);
+  // 5. Post-resize Screen Unsharp Mask / Convolution Pass to restore micro-contrast
+  if (resizedCtx && unsharpAmount > 0) {
+    applyScreenUnsharpMask(resizedCtx, targetWidth, targetHeight, unsharpAmount, unsharpThreshold);
+  }
+
+  // 6. Progressive JPEG Export at 0.82 quality
+  const { blob: resultBlob, isProgressive } = await encodeJpegOutput(resizedCanvas, quality, progressive);
 
   // Clean up resized canvas memory
   resizedCanvas.width = 0;
@@ -329,12 +447,13 @@ export async function processImage(
     },
     preset: aspectPreset,
     quality,
+    isProgressive,
+    colorSpace: 'srgb',
   };
 }
 
 /**
  * Phase 2 Native Share Sheet Export (navigator.share) with automatic fallback to file download.
- * Enables one-tap saving directly to iOS/Android Camera Roll / Photos app.
  */
 export async function exportJpeg(
   blob: Blob,
@@ -342,7 +461,6 @@ export async function exportJpeg(
 ): Promise<ExportResult> {
   const file = new File([blob], filename, { type: 'image/jpeg' });
 
-  // 1. Attempt native Web Share API with files if supported
   if (
     typeof navigator !== 'undefined' &&
     typeof navigator.share === 'function' &&
@@ -353,20 +471,18 @@ export async function exportJpeg(
         await navigator.share({
           files: [file],
           title: 'Instagram Optimized Image',
-          text: 'Resampled with Lanczos-3 to 1080px width at 0.82 quality.',
+          text: 'Resampled with Lanczos-3 to 1080px width at 0.82 quality in sRGB.',
         });
         return { success: true, method: 'share' };
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
-        // User dismissed the native share sheet
         return { success: false, method: 'share', aborted: true };
       }
-      console.warn('Native Web Share failed or was rejected; falling back to download:', err);
+      console.warn('Native Web Share notice; falling back to download:', err);
     }
   }
 
-  // 2. Direct browser file download fallback
   try {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');

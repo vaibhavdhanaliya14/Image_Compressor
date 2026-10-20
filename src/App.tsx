@@ -28,7 +28,7 @@ import {
 } from './engine/pipeline';
 import { InstagramSafeZoneOverlay } from './components/InstagramSafeZoneOverlay';
 
-export type LockedAspect = '4:5' | '1:1' | '9:16';
+export type LockedAspect = '4:5' | '1:1' | '1.91:1' | '9:16';
 
 interface AspectConfig {
   id: LockedAspect;
@@ -52,7 +52,7 @@ const LOCKED_ASPECTS: AspectConfig[] = [
     width: 1080,
     height: 1350,
     maxKb: 600,
-    description: 'Instagram standard for feed posts; maximizes mobile screen real estate',
+    description: 'Instagram standard for feed posts; maximizes mobile screen real estate (1080x1350)',
   },
   {
     id: '1:1',
@@ -63,7 +63,18 @@ const LOCKED_ASPECTS: AspectConfig[] = [
     width: 1080,
     height: 1080,
     maxKb: 500,
-    description: 'Classic Instagram square profile grid; uniform scaling',
+    description: 'Classic Instagram square profile grid; uniform scaling (1080x1080)',
+  },
+  {
+    id: '1.91:1',
+    preset: 'landscape',
+    label: 'Feed Landscape',
+    ratioFraction: '1.91:1',
+    aspect: 1.91, // 1080 / 566
+    width: 1080,
+    height: 566,
+    maxKb: 400,
+    description: 'Instagram landscape feed format; prevents horizontal letterbox borders (1080x566)',
   },
   {
     id: '9:16',
@@ -74,7 +85,7 @@ const LOCKED_ASPECTS: AspectConfig[] = [
     width: 1080,
     height: 1920,
     maxKb: 750,
-    description: 'Full vertical viewport; eliminates horizontal letterboxing and story transcode blur',
+    description: 'Full vertical viewport; eliminates horizontal letterboxing and story transcode blur (1080x1920)',
   },
 ];
 
@@ -707,6 +718,16 @@ export default function App() {
                   <span>Downsample Ratio:</span>
                   <span className="text-rose-400">
                     {(result.dimensions.cropWidth / 1080).toFixed(2)}× downscaling
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Color Space:</span>
+                  <span className="text-emerald-400 font-semibold">Standard sRGB (8-bit)</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Format:</span>
+                  <span className="text-cyan-300 font-semibold">
+                    {result.isProgressive ? 'Progressive JPEG (MozJPEG)' : 'Standard JPEG'}
                   </span>
                 </div>
               </div>

@@ -218,7 +218,10 @@ async function run() {
   }
 
   console.log('Clicking Direct File Download button...');
-  await directDownloadBtn.click();
+  await directDownloadBtn.evaluate((el) => {
+    el.scrollIntoView({ behavior: 'instant', block: 'center' });
+    el.click();
+  });
 
   // Wait for download to appear in downloadDir or in intercepted window.__capturedDownloads
   console.log('Waiting for file export interception and download in', downloadDir);
