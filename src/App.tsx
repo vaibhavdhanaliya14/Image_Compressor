@@ -19,10 +19,13 @@ import {
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
+  Split,
 } from 'lucide-react';
 import {
   processImage,
   exportJpeg,
+  isHeicFile,
+  transcodeHeic,
   type InstagramPreset,
   type PipelineResult,
 } from './engine/pipeline';
@@ -96,15 +99,17 @@ export default function App() {
   const [zoom, setZoom] = useState<number>(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
 
-  // UI view modes
+  // UI view modes & visual comparison
   const [showSafeZones, setShowSafeZones] = useState<boolean>(true);
   const [showGrid, setShowGrid] = useState<boolean>(true);
   const [viewMode, setViewMode] = useState<'cropper' | 'preview'>('cropper');
+  const [isComparing, setIsComparing] = useState<boolean>(false);
 
   // Image source and file state
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourceDimensions, setSourceDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [heicStatus, setHeicStatus] = useState<string | null>(null);
 
   // Engine pipeline settings & results
   const [quality, setQuality] = useState<number>(0.82);
@@ -119,22 +124,41 @@ export default function App() {
 
   const currentConfig = LOCKED_ASPECTS.find((a) => a.id === activeAspectId) ?? LOCKED_ASPECTS[0];
 
-  // Helper to load file
-  const handleFile = (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      setError('Please select an image file (JPEG, PNG, WebP, etc.)');
+  // Helper to load file (supports JPEG, PNG, WebP, and iPhone HEIC/HEIF)
+  const handleFile = async (file: File) => {
+    setError(null);
+    let activeFile = file;
+
+    // Check for native iPhone HEIC/HEIF format
+    if (isHeicFile(file)) {
+      setHeicStatus('Decoding iPhone HEIC...');
+      try {
+        const { blob, filename } = await transcodeHeic(file, (msg) => setHeicStatus(msg));
+        activeFile = new File([blob], filename, { type: 'image/jpeg' });
+      } catch (err: unknown) {
+        console.error('HEIC transcode failed:', err);
+        setError('Failed to decode iPhone HEIC file. Please try a standard JPEG or PNG.');
+        setHeicStatus(null);
+        return;
+      } finally {
+        setHeicStatus(null);
+      }
+    }
+
+    if (!activeFile.type.startsWith('image/')) {
+      setError('Please select a valid image file (JPEG, PNG, WebP, HEIC)');
       return;
     }
-    setError(null);
-    setSourceFile(file);
+
+    setSourceFile(activeFile);
     setResult(null);
 
-    const url = URL.createObjectURL(file);
+    const url = URL.createObjectURL(activeFile);
     setImageSrc(url);
     setCrop({ x: 0, y: 0 });
     setZoom(1);
 
-    // Measure natural dimensions
+    // Measure natural dimensions (respecting EXIF orientation)
     const img = new Image();
     img.onload = () => {
       setSourceDimensions({ width: img.naturalWidth, height: img.naturalHeight });
@@ -176,7 +200,6 @@ export default function App() {
     (_croppedArea: Area, currentCroppedAreaPixels: Area) => {
       setCroppedAreaPixels(currentCroppedAreaPixels);
 
-      // Debounce pipeline execution during touch/drag gestures to maintain 60 FPS
       if (debounceTimerRef.current) {
         window.clearTimeout(debounceTimerRef.current);
       }
@@ -195,20 +218,18 @@ export default function App() {
     setZoom(1);
     const newConfig = LOCKED_ASPECTS.find((a) => a.id === newAspectId) ?? LOCKED_ASPECTS[0];
 
-    // Trigger pipeline on next tick once react-easy-crop recalculates
     setTimeout(() => {
       executePipeline(croppedAreaPixels, quality, unsharpAmount, newConfig);
     }, 150);
   };
 
-  // Phase 2 Export: Web Share API with download fallback
+  // Phase 2 & 4 Export: Web Share API with valid File metadata & fallback
   const handleExport = async (preferredMethod?: 'share' | 'download') => {
     if (!result) return;
 
     const filename = `instagram_${activeAspectId.replace(':', 'x')}_1080px_q${Math.round(result.quality * 100)}.jpg`;
 
     if (preferredMethod === 'download') {
-      // Force direct file download
       const a = document.createElement('a');
       a.href = result.blobUrl;
       a.download = filename;
@@ -242,19 +263,17 @@ export default function App() {
   const loadHighResSample = () => {
     const canvas = document.createElement('canvas');
     canvas.width = 3240;
-    canvas.height = 4050; // Ultra high-res 4:5 13MP
-    const ctx = canvas.getContext('2d');
+    canvas.height = 4050; // Ultra high-res 4:5 13.1MP
+    const ctx = canvas.getContext('2d', { colorSpace: 'srgb' });
     if (!ctx) return;
 
-    // Dark gradient background
     const grad = ctx.createLinearGradient(0, 0, 3240, 4050);
-    grad.addColorStop(0, '#111827');
+    grad.addColorStop(0, '#0f172a');
     grad.addColorStop(0.5, '#1e1b4b');
-    grad.addColorStop(1, '#0f172a');
+    grad.addColorStop(1, '#090d16');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 3240, 4050);
 
-    // High frequency rings and radial geometry to test Lanczos-3 sharpness
     for (let r = 200; r <= 1400; r += 40) {
       ctx.beginPath();
       ctx.arc(1620, 1800, r, 0, Math.PI * 2);
@@ -263,7 +282,6 @@ export default function App() {
       ctx.stroke();
     }
 
-    // Focal subject card
     ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
     ctx.beginPath();
     ctx.roundRect(620, 1100, 2000, 1500, 80);
@@ -272,7 +290,6 @@ export default function App() {
     ctx.lineWidth = 12;
     ctx.stroke();
 
-    // High-contrast typography for micro-contrast testing
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 150px -apple-system, sans-serif';
     ctx.textAlign = 'center';
@@ -283,7 +300,6 @@ export default function App() {
     ctx.fillText('Lanczos-3 Sub-2s Resampling Pipeline', 1620, 1750);
     ctx.fillText('Source: 3240 × 4050 px (13.1 MP)', 1620, 1870);
 
-    // Grid lines for edge alignment
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
     ctx.lineWidth = 2;
     for (let x = 0; x < 3240; x += 180) {
@@ -301,7 +317,6 @@ export default function App() {
     }, 'image/jpeg', 0.95);
   };
 
-  // Load sample on mount if empty
   useEffect(() => {
     if (!imageSrc) {
       loadHighResSample();
@@ -332,28 +347,36 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <h1 className="text-base font-semibold tracking-tight text-white">Instagram Image Optimizer</h1>
                 <span className="text-[11px] px-2 py-0.5 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-400 font-medium">
-                  Phase 2 • Mobile UX
+                  Phase 4 • Production
                 </span>
               </div>
               <p className="text-[11px] text-neutral-400 hidden sm:block">
-                Touch crop locked to 4:5 / 1:1 / 9:16 • Lanczos-3 (1080px) • Web Share API
+                iPhone HEIC Ingestion • Lanczos-3 (1080px) • Visual Hold-to-Compare • Web Share API
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
+            {/* HEIC Transcoding Indicator */}
+            {heicStatus && (
+              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono animate-pulse">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                <span>{heicStatus}</span>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs font-medium text-neutral-200 transition-colors cursor-pointer"
             >
               <UploadCloud className="w-4 h-4 text-rose-400" />
-              <span className="hidden sm:inline">Upload Image</span>
+              <span className="hidden sm:inline">Upload Image / HEIC</span>
             </button>
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,.heic,.heif"
               className="hidden"
               onChange={(e) => {
                 if (e.target.files && e.target.files[0]) {
@@ -413,7 +436,7 @@ export default function App() {
               })}
             </div>
 
-            {/* Viewport & Overlay Tools Row */}
+            {/* Viewport & Visual Compare Tools Row */}
             <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-neutral-800/70">
               <div className="flex items-center gap-2">
                 {/* Safe-Zone Guide Toggle */}
@@ -447,32 +470,64 @@ export default function App() {
                 </button>
               </div>
 
-              {/* View Mode Toggle (Crop vs 1080px Preview) */}
-              <div className="flex items-center bg-neutral-900 border border-neutral-800 p-0.5 rounded-lg">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('cropper')}
-                  className={`px-3 py-1 rounded text-xs transition-colors cursor-pointer ${
-                    viewMode === 'cropper' ? 'bg-neutral-800 text-white font-medium' : 'text-neutral-400'
-                  }`}
-                >
-                  Cropper
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('preview')}
-                  className={`px-3 py-1 rounded text-xs transition-colors cursor-pointer ${
-                    viewMode === 'preview' ? 'bg-rose-500 text-white font-medium' : 'text-neutral-400'
-                  }`}
-                >
-                  1080px Output
-                </button>
+              <div className="flex items-center gap-2">
+                {/* Phase 4 Visual "Hold to Compare" Button */}
+                {result && (
+                  <button
+                    type="button"
+                    onPointerDown={() => {
+                      setViewMode('preview');
+                      setIsComparing(true);
+                    }}
+                    onPointerUp={() => setIsComparing(false)}
+                    onPointerLeave={() => setIsComparing(false)}
+                    onTouchStart={() => {
+                      setViewMode('preview');
+                      setIsComparing(true);
+                    }}
+                    onTouchEnd={() => setIsComparing(false)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all select-none cursor-pointer ${
+                      isComparing
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-md shadow-amber-500/20 scale-95'
+                        : 'bg-neutral-900 border-neutral-800 text-neutral-300 hover:text-white hover:border-neutral-700'
+                    }`}
+                    title="Press and hold to inspect raw unsharpened reference crop"
+                  >
+                    <Split className="w-3.5 h-3.5" />
+                    <span>{isComparing ? 'Showing Raw Crop' : 'Hold to Compare'}</span>
+                  </button>
+                )}
+
+                {/* View Mode Toggle (Crop vs 1080px Preview) */}
+                <div className="flex items-center bg-neutral-900 border border-neutral-800 p-0.5 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('cropper')}
+                    className={`px-3 py-1 rounded text-xs transition-colors cursor-pointer ${
+                      viewMode === 'cropper' ? 'bg-neutral-800 text-white font-medium' : 'text-neutral-400'
+                    }`}
+                  >
+                    Cropper
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('preview')}
+                    className={`px-3 py-1 rounded text-xs transition-colors cursor-pointer ${
+                      viewMode === 'preview' ? 'bg-rose-500 text-white font-medium' : 'text-neutral-400'
+                    }`}
+                  >
+                    1080px Output
+                  </button>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Interactive Crop Stage / Preview Canvas */}
-          <div className="relative w-full h-[460px] sm:h-[540px] bg-[#050608] rounded-2xl overflow-hidden border border-neutral-800 shadow-2xl flex items-center justify-center">
+          {/* Interactive Crop Stage / Preview Canvas (Touch-action locked) */}
+          <div
+            className="relative w-full h-[460px] sm:h-[540px] bg-[#050608] rounded-2xl overflow-hidden border border-neutral-800 shadow-2xl flex items-center justify-center touch-none select-none"
+            style={{ touchAction: 'none' }}
+          >
             {imageSrc ? (
               viewMode === 'cropper' ? (
                 <>
@@ -492,7 +547,7 @@ export default function App() {
                     }}
                   />
 
-                  {/* Phase 2 Simulated Instagram Safe-Zone Overlays */}
+                  {/* Simulated Instagram Safe-Zone Overlays */}
                   <InstagramSafeZoneOverlay preset={currentConfig.preset} active={showSafeZones} />
 
                   {/* Corner Target Resolution Pill */}
@@ -501,15 +556,29 @@ export default function App() {
                   </div>
                 </>
               ) : (
-                /* 1080px Sharpened Output Viewport */
+                /* 1080px Output Viewport with Hold-to-Compare Visual Delta */
                 <div className="relative w-full h-full flex items-center justify-center p-4 bg-[#090b10]">
                   {result ? (
                     <div className="relative max-h-full max-w-full flex items-center justify-center">
                       <img
-                        src={result.blobUrl}
-                        alt="1080px Output"
-                        className="max-h-[500px] w-auto object-contain rounded-lg shadow-2xl border border-neutral-800"
+                        src={isComparing && result.rawBlobUrl ? result.rawBlobUrl : result.blobUrl}
+                        alt={isComparing ? 'Raw Unsharpened Crop' : '1080px Sharpened Output'}
+                        className={`max-h-[500px] w-auto object-contain rounded-lg shadow-2xl border transition-all ${
+                          isComparing ? 'border-amber-500/80 ring-2 ring-amber-500/30' : 'border-neutral-800'
+                        }`}
                       />
+
+                      {/* Visual Delta Badge */}
+                      <div
+                        className={`absolute top-3 left-3 backdrop-blur-md px-2.5 py-1 rounded-md text-[10px] font-mono font-bold tracking-wider shadow-lg ${
+                          isComparing
+                            ? 'bg-amber-500/90 text-black border border-amber-400'
+                            : 'bg-emerald-500/90 text-black border border-emerald-400'
+                        }`}
+                      >
+                        {isComparing ? '▲ RAW UNSHARPENED CROP' : '✓ LANCZOS-3 SHARPENED (1080px)'}
+                      </div>
+
                       <div className="absolute bottom-3 right-3 bg-black/85 backdrop-blur-md border border-neutral-700/70 text-[11px] font-mono text-neutral-200 px-2.5 py-1 rounded-md shadow-lg">
                         {result.width} × {result.height} px • Q{Math.round(result.quality * 100)}
                       </div>
@@ -589,7 +658,7 @@ export default function App() {
 
         {/* Right Column: Engine Telemetry & Phase 2 Native Export Actions */}
         <div className="lg:col-span-4 flex flex-col gap-4">
-          {/* Phase 2 Export Card (Web Share API + Camera Roll Save) */}
+          {/* Native Export Card (Web Share API + Camera Roll Save) */}
           <div className="bg-gradient-to-br from-[#181a26] via-[#12141e] to-[#0e1017] border border-rose-500/30 rounded-2xl p-5 shadow-2xl relative overflow-hidden">
             <div className="absolute -right-8 -top-8 w-28 h-28 bg-rose-500/10 rounded-full blur-2xl pointer-events-none" />
 
@@ -597,7 +666,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <Share2 className="w-4 h-4 text-rose-400" />
                 <h2 className="text-sm font-semibold tracking-wide uppercase text-neutral-200">
-                  Phase 2 Native Export
+                  Phase 4 Native Export
                 </h2>
               </div>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono">
@@ -775,7 +844,7 @@ export default function App() {
             {/* Unsharp Mask Amount Slider */}
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs">
-                <span className="text-neutral-300 font-medium">Unsharp Mask Amount</span>
+                <span className="text-neutral-300 font-medium">Screen Unsharp Mask Amount</span>
                 <span className="font-mono text-purple-400 font-semibold">{unsharpAmount}%</span>
               </div>
               <input
@@ -792,7 +861,7 @@ export default function App() {
                 className="w-full h-1.5 bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
               />
               <span className="text-[10px] text-neutral-400 block">
-                Counteracts blurring from Instagram's 4:2:0 chroma subsampling.
+                Post-resize Gaussian convolution (sigma = 0.8) restoring edge micro-contrast.
               </span>
             </div>
           </div>
@@ -801,8 +870,8 @@ export default function App() {
           <div className="bg-[#11131c]/50 border border-neutral-800/80 rounded-2xl p-4 flex items-start gap-3">
             <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
             <div className="text-xs text-neutral-400 leading-relaxed">
-              <span className="text-neutral-200 font-semibold block">Privacy & Ingestion Safe:</span>
-              Photos stay entirely in client memory. All EXIF metadata (GPS, camera serials) is stripped during canvas re-encoding.
+              <span className="text-neutral-200 font-semibold block">iPhone HEIC & Privacy Native:</span>
+              HEIC photos from iOS Camera Roll are transcoded locally in RAM. All EXIF GPS coordinates and camera serials are stripped during re-encoding.
             </div>
           </div>
 

@@ -77,6 +77,7 @@ export interface PipelineOptions {
 export interface PipelineResult {
   blob: Blob;
   blobUrl: string;
+  rawBlobUrl: string;              // Raw unsharpened reference preview for visual delta inspection
   width: number;
   height: number;
   originalSize: number;
@@ -124,6 +125,43 @@ export function getPica(): Pica {
 }
 
 /**
+ * Detects if a file or URL points to an Apple HEIC/HEIF container.
+ */
+export function isHeicFile(source: File | Blob | string): boolean {
+  if (typeof source === 'string') {
+    return /\.hei[cf]$/i.test(source.split('?')[0]);
+  }
+  if (source instanceof File && source.name) {
+    if (/\.hei[cf]$/i.test(source.name)) return true;
+  }
+  const type = source.type ? source.type.toLowerCase() : '';
+  return type === 'image/heic' || type === 'image/heif' || type.includes('heic') || type.includes('heif');
+}
+
+/**
+ * Dynamically lazy-loads `heic2any` to transcode Apple HEIC into standard sRGB JPEG Blob.
+ */
+export async function transcodeHeic(
+  source: File | Blob,
+  onProgress?: (status: string) => void
+): Promise<{ blob: Blob; filename: string }> {
+  onProgress?.('Decoding iPhone HEIC...');
+  const heic2any = (await import('heic2any')).default;
+
+  const result = await heic2any({
+    blob: source,
+    toType: 'image/jpeg',
+    quality: 0.95,
+  });
+
+  const blob = Array.isArray(result) ? result[0] : result;
+  const originalName = source instanceof File ? source.name : 'photo.heic';
+  const newName = originalName.replace(/\.hei[cf]$/i, '.jpg');
+
+  return { blob, filename: newName };
+}
+
+/**
  * Calculates a default center-crop rectangle given the source dimensions and the target aspect ratio.
  */
 export function calculateCenterCrop(sourceWidth: number, sourceHeight: number, targetRatio: number): CropRect {
@@ -134,12 +172,10 @@ export function calculateCenterCrop(sourceWidth: number, sourceHeight: number, t
   }
 
   if (sourceRatio > targetRatio) {
-    // Source is wider than target: clamp width, keep full height
     const width = Math.round(sourceHeight * targetRatio);
     const x = Math.round((sourceWidth - width) / 2);
     return { x, y: 0, width, height: sourceHeight };
   } else {
-    // Source is taller than target: clamp height, keep full width
     const height = Math.round(sourceWidth / targetRatio);
     const y = Math.round((sourceHeight - height) / 2);
     return { x: 0, y, width: sourceWidth, height };
@@ -177,7 +213,7 @@ async function applyMemoryGuard(bitmap: ImageBitmap): Promise<ImageBitmap> {
 }
 
 /**
- * Loads an image from a File, Blob, or URL into an ImageBitmap (with EXIF auto-orientation).
+ * Loads an image from a File, Blob, or URL into an ImageBitmap with EXIF orientation preservation.
  */
 async function loadImageBitmap(source: File | Blob | string): Promise<{ bitmap: ImageBitmap; size: number }> {
   let blob: Blob;
@@ -192,6 +228,14 @@ async function loadImageBitmap(source: File | Blob | string): Promise<{ bitmap: 
     originalSize = source.size;
   }
 
+  // Transcode HEIC if detected
+  if (isHeicFile(blob)) {
+    const { blob: converted } = await transcodeHeic(blob);
+    blob = converted;
+    originalSize = converted.size;
+  }
+
+  // createImageBitmap natively respects EXIF orientation in modern browsers
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
@@ -222,9 +266,6 @@ export function applyScreenUnsharpMask(
   const copy = new Uint8ClampedArray(data);
 
   // 3x3 Gaussian convolution kernel approximating sigma = 0.8:
-  // [1, 2, 1]
-  // [2, 4, 2] / 16
-  // [1, 2, 1]
   const kernel = [
     1 / 16, 2 / 16, 1 / 16,
     2 / 16, 4 / 16, 2 / 16,
@@ -313,8 +354,9 @@ async function encodeJpegOutput(
  * 2. Aspect Ratio Presets: 4:5, 1:1, 1.91:1, 9:16
  * 3. Color Space: Standard sRGB forced via 2D Canvas context (8-bit per channel)
  * 4. Downsampling: Lanczos-3 interpolation via Pica
- * 5. Sharpening: Post-resize unsharp mask convolution pass
- * 6. Export Format: Progressive JPEG at 0.82 quality
+ * 5. Visual Compare: Generates raw unsharpened reference preview alongside sharpened output
+ * 6. Sharpening: Post-resize unsharp mask convolution pass
+ * 7. Export Format: Progressive JPEG at 0.82 quality
  */
 export async function processImage(
   source: File | Blob | string,
@@ -331,7 +373,7 @@ export async function processImage(
   const unsharpThreshold = options.unsharpThreshold ?? 2;
   const progressive = options.progressive ?? true;
 
-  // 1. Ingest image and decode
+  // 1. Ingest image and decode (with HEIC support)
   const { bitmap, size: originalSize } = await loadImageBitmap(source);
   const sourceWidth = bitmap.width;
   const sourceHeight = bitmap.height;
@@ -409,12 +451,25 @@ export async function processImage(
   cropCanvas.width = 0;
   cropCanvas.height = 0;
 
-  // 5. Post-resize Screen Unsharp Mask / Convolution Pass to restore micro-contrast
+  // 5. Generate Raw Unsharpened Reference Preview for "Hold to Compare" Visual Delta Inspection
+  const rawCanvas = document.createElement('canvas');
+  rawCanvas.width = targetWidth;
+  rawCanvas.height = targetHeight;
+  const rawCtx = rawCanvas.getContext('2d', { colorSpace: 'srgb', willReadFrequently: true });
+  if (rawCtx) {
+    rawCtx.drawImage(resizedCanvas, 0, 0);
+  }
+  const rawBlob = await resizer.toBlob(rawCanvas, 'image/jpeg', 0.82);
+  const rawBlobUrl = URL.createObjectURL(rawBlob);
+  rawCanvas.width = 0;
+  rawCanvas.height = 0;
+
+  // 6. Post-resize Screen Unsharp Mask / Convolution Pass to restore micro-contrast
   if (resizedCtx && unsharpAmount > 0) {
     applyScreenUnsharpMask(resizedCtx, targetWidth, targetHeight, unsharpAmount, unsharpThreshold);
   }
 
-  // 6. Progressive JPEG Export at 0.82 quality
+  // 7. Progressive JPEG Export at 0.82 quality
   const { blob: resultBlob, isProgressive } = await encodeJpegOutput(resizedCanvas, quality, progressive);
 
   // Clean up resized canvas memory
@@ -429,6 +484,7 @@ export async function processImage(
   return {
     blob: resultBlob,
     blobUrl,
+    rawBlobUrl,
     width: targetWidth,
     height: targetHeight,
     originalSize,
@@ -453,7 +509,8 @@ export async function processImage(
 }
 
 /**
- * Phase 2 Native Share Sheet Export (navigator.share) with automatic fallback to file download.
+ * Phase 2 & 4 Native Share Sheet Export (navigator.share) with automatic fallback to file download.
+ * Ensures the Web Share API passes a valid `File` instance with title and text metadata.
  */
 export async function exportJpeg(
   blob: Blob,
@@ -470,8 +527,8 @@ export async function exportJpeg(
       if (navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
-          title: 'Instagram Optimized Image',
-          text: 'Resampled with Lanczos-3 to 1080px width at 0.82 quality in sRGB.',
+          title: 'Instagram Optimized Photo (1080px)',
+          text: 'Pre-tuned 1080px Lanczos-3 JPEG optimized for Instagram upload.',
         });
         return { success: true, method: 'share' };
       }

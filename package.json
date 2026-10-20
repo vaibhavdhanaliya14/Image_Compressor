@@ -10,7 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@jsquash/jpeg": "^1.6.0",
     "@types/pica": "^9.0.5",
+    "heic2any": "^0.0.4",
     "lucide-react": "^1.59.0",
     "pica": "^10.0.3",
     "react": "^19.3.1",
