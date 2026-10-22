@@ -3,12 +3,20 @@
 > **Client-Side WebAssembly Image Resampling & Ingestion Engine**  
 > Eliminates social media transcoding artifacts through deterministic downsampling, sRGB gamut mapping, and screen-targeted unsharp masking directly in the browser.
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-insta--optimizer.vercel.app-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://insta-optimizer.vercel.app/)
+
 [![React](https://img.shields.io/badge/React-19.3-61DAFB?logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Vite](https://img.shields.io/badge/Vite-8.3-646CFF?logo=vite&logoColor=white)](https://vite.dev)
 [![Tailwind CSS](https://img.shields.io/badge/TailwindCSS-4.3-38B2AC?logo=tailwind-css&logoColor=white)](https://tailwindcss.com)
 [![WebAssembly](https://img.shields.io/badge/WebAssembly-MozJPEG-654FF0?logo=webassembly&logoColor=white)](https://webassembly.org)
 [![Privacy](https://img.shields.io/badge/Privacy-100%25%20Client--Side-10B981)](#-zero-latency--zero-server-data-boundary)
+
+---
+
+### 🌐 Live Production Application
+Experience the optimizer directly on your desktop or mobile device (iPhone/Android camera rolls supported):  
+👉 **[https://insta-optimizer.vercel.app/](https://insta-optimizer.vercel.app/)**
 
 ---
 
